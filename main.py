@@ -1,54 +1,75 @@
 #!/usr/bin/env python3.9
-from enum import IntEnum, IntFlag
+from __future__ import annotations
+
 import socket
 import struct
 from dataclasses import dataclass
+from enum import IntEnum
+from enum import IntFlag
+from typing import Any
+from typing import Mapping
 from typing import Optional
+
+# TODO: improve enum names
+# TODO: replace wikipedia links with rfc links?
 
 ETH_P_ALL = 0x0003
 ETH_P_IP = 0x0800
 
 
 class BinaryReader:
-    def __init__(self, data_view: memoryview) -> None:
-        self.data_view = data_view
+    """\
+    A class to read binary data from a buffer.
+
+    >>>   reader = BinaryReader(b"\x01\x04\x00\x00\x00")
+    >>>   assert reader.read_u8() == 0x01
+    >>>   assert reader.read_u32() == 0x04
+    """
+
+    def __init__(self, data: bytes) -> None:
+        self.data_view = memoryview(data)
+        self.offset = 0
+
+    def increment_offset(self, length: int) -> None:
+        self.data_view = self.data_view[length:]
+        self.offset += length
 
     def read_u8(self) -> int:
         val = self.data_view[0]
-        self.data_view = self.data_view[1:]
+        self.increment_offset(1)
         return val
 
     def read_u16(self) -> int:
         (val,) = struct.unpack(">H", self.data_view[:2])
-        self.data_view = self.data_view[2:]
+        self.increment_offset(2)
         return val
 
     def read_u32(self) -> int:
         (val,) = struct.unpack(">I", self.data_view[:4])
-        self.data_view = self.data_view[4:]
+        self.increment_offset(4)
         return val
 
     def read_u64(self) -> int:
         (val,) = struct.unpack(">Q", self.data_view[:8])
-        self.data_view = self.data_view[8:]
+        self.increment_offset(8)
         return val
 
     def read_bytes(self, length: int) -> bytes:
         val = self.data_view[:length].tobytes()
-        self.data_view = self.data_view[length:]
+        self.increment_offset(length)
         return val
 
 
 class EtherType(IntEnum):
     # https://en.wikipedia.org/wiki/EtherType#Values
-    IPv4 = 0x0800
-    ARP = 0x0806
-    IPv6 = 0x86DD
+    INTERNET_PROTOCOL_VERSION_4 = 0x0800
+    ADDRESS_RESOLUTION_PROTOCOL = 0x0806
+    INTERNET_PROTOCOL_VERSION_6 = 0x86DD
 
 
 @dataclass
 class BasePacket:
-    data: bytes
+    data: Optional[BasePacket]
 
 
 @dataclass
@@ -78,7 +99,7 @@ def read_ethernet_frame(reader: BinaryReader) -> EthernetFrame:
         dst_mac=dst_mac,
         src_mac=src_mac,
         ether_type=EtherType(ether_type),
-        data=reader.data_view.tobytes(),
+        data=None,  # to be assigned
     )
 
 
@@ -126,37 +147,37 @@ class IPv4OptionClass(IntEnum):
 
 
 class IPv4OptionType(IntEnum):
-    EOOL = 0  # End of Option List
-    NOP = 1  # No Operation
-    # SEC = 2  # Security (defunct)
-    RR = 7  # Record Route
-    ZSU = 10  # Experimental Measurement
-    MTUP = 11  # MTU Probe
-    MTUR = 12  # MTU Reply
-    ENCODE = 15  # ENCODE
-    QS = 25  # Quick-Start
+    END_OF_OPTION_LIST = 0
+    NO_OPERATION = 1
+    # SECURITY = 2 (defunct)
+    RECORD_ROUTE = 7
+    ZSU = 10
+    MTU_PROBE = 11
+    MTU_REPLY = 12
+    ENCODE = 15
+    QUICK_START = 25
     # TODO: why are all experiement ids referencing RFC3692?? wikipedia bug?
-    # EXP = 30  # RFC3692-style Experiment
-    TS = 68  # Time Stamp
-    TR = 82  # Traceroute
-    # EXP = 94  # RFC3692-style Experiment
-    SEC = 130  # Security (RIPSO)
-    LSR = 131  # Loose Source Route
-    E = 133  # SEC	Extended Security (RIPSO)
-    CIPSO = 134  # Commercial IP Security Option
-    SID = 136  # Stream ID
-    SSR = 137  # Strict Source Route
-    VISA = 142  # Experimental Access Control
-    IMITD = 144  # IMI Traffic Descriptor
-    EIP = 145  # Extended Internet Protocol
-    ADDEXT = 147  # Address Extension
-    RTRALT = 148  # Router Alert
-    SDB = 149  # Selective Directed Broadcast
-    DPS = 151  # Dynamic Packet State
-    UMP = 152  # Upstream Multicast Pkt.
-    # EXP = 158  # RFC3692-style Experiment
-    FINN = 205  # Experimental Flow Control
-    # EXP = 222  # RFC3692-style Experiment
+    # EXPERIMENT = 30  # RFC3692-style
+    TIME_STAMP = 68
+    TRACE_ROUTE = 82
+    # EXPERIMENT = 94  # RFC3692-style
+    SECURITY = 130  # (RIPSO)
+    LOOSE_SOURCE_ROUTE = 131
+    EXTENDED_SECURITY = 133  # (RIPSO)
+    COMMERCIAL_IP_SECURITY_OPTION = 134
+    STREAM_ID = 136
+    STRICT_SOURCE_ROUTE = 137
+    VISA = 142
+    IMI_TRAFFIC_DESCRIPTOR = 144
+    EXTENDED_INTERNET_PROTOCOL = 145
+    ADDRESS_EXTENSION = 147
+    ROUTER_ALERT = 148
+    SELECTIVE_DIRECTED_BROADCAST = 149
+    DYNAMIC_PACKET_STATE = 151
+    UPSTREAM_MULTICAST_PACKET = 152
+    # EXPERIMENT = 158  # RFC3692-style
+    EXPERIMENTAL_FLOW_CONTROL = 205
+    # EXPERIMENT = 222  # RFC3692-style
 
 
 @dataclass
@@ -188,14 +209,18 @@ def read_ipv4_packet(reader: BinaryReader) -> IPv4Packet:
     """\
     Read an internet protocol (version 4) packet.
 
-    https://en.wikipedia.org/wiki/IPv4#Packet_structure
+    https://datatracker.ietf.org/doc/html/rfc791#section-3.1
     """
+    reader_start_offset = reader.offset
+
     first_byte = reader.read_u8()
     assert ((first_byte & 0b11110000) >> 4) == 4
     header_length = first_byte & 0b00001111
 
     second_byte = reader.read_u8()
+    # https://datatracker.ietf.org/doc/html/rfc2474
     differentiated_services_code_point = (second_byte & 0b11111100) >> 2
+    # https://datatracker.ietf.org/doc/html/rfc3168
     explicit_congestion_notification = second_byte & 0b00000011
 
     total_length = reader.read_u16()
@@ -213,9 +238,8 @@ def read_ipv4_packet(reader: BinaryReader) -> IPv4Packet:
     src_ip = socket.inet_ntoa(reader.read_bytes(4))
     dest_ip = socket.inet_ntoa(reader.read_bytes(4))
 
-    options = []
-    options_bytes_read = 0  # can probably be better
-    while (options_bytes_read / 4) < (header_length - 5):
+    options: list[IPv4Option] = []
+    while ((reader.offset - reader_start_offset) / 4) < header_length:
         byte = reader.read_u8()
         option_copied = ((byte & 0b10000000) >> 7) == 1
         option_class = IPv4OptionClass((byte & 0b01100000) >> 5)
@@ -223,8 +247,6 @@ def read_ipv4_packet(reader: BinaryReader) -> IPv4Packet:
         option_length = reader.read_u8()
         # TODO: assert length is ok
         option_data = reader.read_bytes(option_length)
-
-        options_bytes_read += 2 + option_length
 
         options.append(
             IPv4Option(
@@ -235,12 +257,19 @@ def read_ipv4_packet(reader: BinaryReader) -> IPv4Packet:
             )
         )
 
-        if option_type == IPv4OptionType.EOOL:
+        if option_type == IPv4OptionType.END_OF_OPTION_LIST:
             # break out of the loop early
+
+            # TODO: skip padding bytes
+            breakpoint()
+
+            print(reader.data_view.tobytes())
+            left = (header_length * 4) - (reader.offset - reader_start_offset)
+            reader.increment_offset(left)
+
             break
 
     return IPv4Packet(
-        data=reader.data_view.tobytes(),
         differentiated_services_code_point=differentiated_services_code_point,
         explicit_congestion_notification=explicit_congestion_notification,
         total_length=total_length,
@@ -253,6 +282,7 @@ def read_ipv4_packet(reader: BinaryReader) -> IPv4Packet:
         src_ip=src_ip,
         dest_ip=dest_ip,
         options=options,
+        data=None,  # to be assigned
     )
 
 
@@ -261,20 +291,46 @@ def read_arp_packet(reader: BinaryReader):
 
 
 class TCPFlags(IntFlag):
-    NS = 1 << 1
-    CWR = 1 << 2
-    ECE = 1 << 3
-    URG = 1 << 4
-    ACK = 1 << 5
-    PSH = 1 << 6
-    RST = 1 << 7
-    SYN = 1 << 8
-    FIN = 1 << 9
+    EXE_NONCE_CONCEALMENT_PROTECTION = 1 << 1
+    CONGESTION_WINDOW_REDUCED = 1 << 2
+    EXE_ECHO = 1 << 3
+    URGENT = 1 << 4  # indicates the acknowledge field is significant
+    ACKNOWLEDGEMENT = 1 << 5  # indicates the urgent pointer field is significant
+    PUSH_FUNCTION = 1 << 6
+    RESET_CONNECTION = 1 << 7
+    SYNCHRONIZE = 1 << 8
+    FIN = 1 << 9  # last packet from sender
+
+
+class TCPOptionKind(IntEnum):
+    # https://www.iana.org/assignments/tcp-parameters/tcp-parameters.xhtml#tcp-parameters-1
+    END_OF_OPTION_LIST = 0
+    NO_OPERATION = 1
+    MAXIMUM_SEGMENT_SIZE = 2
+    WINDOW_SCALE = 3  # https://www.rfc-editor.org/rfc/rfc7323.html
+    SELECTIVE_ACKNOWLEDGEMENT_PERMITTED = 4
+    SELECTIVE_ACKNOWLEDGEMENT = 5
+    ECHO = 6  # obseleted by option 8
+    ECHO_REPLY = 7  # obseleted by option 8
+    TIMESTAMPS = 8  # https://www.rfc-editor.org/rfc/rfc7323.html
+    PARTIAL_ORDER_CONNECTION_PERMITTED = 9  # obselete
+    PARTIAL_ORDER_SERVICE_PROFILE = 10  # obselete
+    CC = 11  # obselete (TODO: name)
+    CC_NEW = 12  # obselete (TODO: name)
+    CC_ECHO = 13  # obselete (TODO: name)
+    TCP_ALTERNATE_CHECKSUM_REQUEST = 14  # obselete
+    TCP_ALTERNATE_CHECKSUM_DATA = 14  # obselete
+    SKEETER_CONTROL = 15
+    BUBBA_CONTROL = 16
 
 
 @dataclass
 class TCPOption:
-    ...
+    kind: int
+
+    # only maximum segment size options have a body
+    length: int
+    data: Mapping[str, Any]
 
 
 @dataclass
@@ -294,6 +350,14 @@ class TCPPacket(BasePacket):
 
 
 def read_tcp_packet(reader: BinaryReader) -> TCPPacket:
+    """\
+    Read a transmission control protocol packet.
+
+    https://datatracker.ietf.org/doc/html/rfc793#section-3.1
+    """
+
+    reader_start_offset = reader.offset
+
     src_port = reader.read_u16()
     dest_port = reader.read_u16()
     sequence_number = reader.read_u32()
@@ -302,26 +366,88 @@ def read_tcp_packet(reader: BinaryReader) -> TCPPacket:
     eleventh_byte = reader.read_u8()
     twelth_byte = reader.read_u8()
     data_offset = (eleventh_byte & 0b11110000) >> 4
-    reserved = (eleventh_byte & 0b00001110) >> 1
-    assert reserved == 0
+    assert ((eleventh_byte & 0b00001110) >> 1) == 0  # reserved
     flags = TCPFlags(((eleventh_byte & 0b00000001) << 8) | twelth_byte)
 
     window_size = reader.read_u16()
     checksum = reader.read_u16()
 
-    if flags & TCPFlags.URG:
-        urgent_pointer = reader.read_u16()
-    else:
+    urgent_pointer = reader.read_u16()
+    if not flags & TCPFlags.URGENT:
+        # be a bit more explicit here
         urgent_pointer = None
 
     options = []
-    if data_offset > 5:
-        # TODO: options
-        breakpoint()
-        ...
+    while ((reader.offset - reader_start_offset) / 4) < data_offset:
+        # b"\x02\x04\x05\xb4\x04\x02\x08\n7\xb6\x95\xb9\x00\x00\x00\x00\x01\x03\x03\x07"
+        option_kind = TCPOptionKind(reader.read_u8())
+
+        # TODO: make a decorator solution for these
+        # TODO: make individual classes for options to parse data into explicitly?
+        if option_kind == TCPOptionKind.END_OF_OPTION_LIST:
+            # break out of the loop early
+
+            # TODO: increment offset to skip padding bytes
+            break
+        elif option_kind == TCPOptionKind.NO_OPERATION:
+            # no need to handle this
+            continue
+        elif option_kind == TCPOptionKind.MAXIMUM_SEGMENT_SIZE:
+            option_length = reader.read_u8()
+            assert option_length == 4
+            option_data = {
+                "maximum_segment_size": reader.read_u16(),
+            }
+        elif option_kind == TCPOptionKind.WINDOW_SCALE:
+            # https://datatracker.ietf.org/doc/html/rfc7323#section-2.2
+            option_length = reader.read_u8()
+            assert option_length == 3
+            option_data = {
+                "shift": reader.read_u8(),
+            }
+        elif option_kind == TCPOptionKind.SELECTIVE_ACKNOWLEDGEMENT_PERMITTED:
+            # https://datatracker.ietf.org/doc/html/rfc2018#section-2
+            option_length = reader.read_u8()
+            assert option_length == 2
+            option_data = {}
+        elif option_kind == TCPOptionKind.SELECTIVE_ACKNOWLEDGEMENT:
+            # https://datatracker.ietf.org/doc/html/rfc2018#section-3
+            option_length = reader.read_u8()
+
+            # TODO: this packet - it's a bit more complex
+
+            reader.increment_offset(option_length - 2)
+            continue
+        elif option_kind == TCPOptionKind.TIMESTAMPS:
+            # https://datatracker.ietf.org/doc/html/rfc7323#section-3.2
+            option_length = reader.read_u8()
+            assert option_length == 10
+            option_data = {
+                "ts_val": reader.read_u32(),
+                "ts_ecr": reader.read_u32(),
+            }
+        else:
+            print("Unhandled option (assuming no data)", option_kind)
+
+            # should these be None? 0 & None?
+            option_length = 0
+            option_data = {}
+
+        options.append(
+            TCPOption(
+                kind=option_kind,
+                length=option_length,
+                data=option_data,
+            )
+        )
+
+        if option_kind == TCPOptionKind.END_OF_OPTION_LIST:
+            # break out of the loop early
+
+            # TODO: i believe i need to skip padding bytes
+            break
 
     return TCPPacket(
-        data=reader.data_view.tobytes(),
         src_port=src_port,
         dest_port=dest_port,
         sequence_number=sequence_number,
@@ -333,6 +459,7 @@ def read_tcp_packet(reader: BinaryReader) -> TCPPacket:
         checksum=checksum,
         urgent_pointer=urgent_pointer,
         options=options,
+        data=None,  # to be assigned
     )
 
 
@@ -350,11 +477,16 @@ def read_udp_packet(reader: BinaryReader) -> UDPPacket:
         dest_port=reader.read_u16(),
         length=reader.read_u16(),
         checksum=reader.read_u16(),
-        data=reader.data_view.tobytes(),
+        data=None,  # to be assigned
     )
 
 
-def read_icmp_packet(reader: BinaryReader):
+@dataclass
+class ICMPPacket(BasePacket):
+    ...  # TODO
+
+
+def read_icmp_packet(reader: BinaryReader) -> ICMPPacket:
     ...
 
 
@@ -370,6 +502,39 @@ def read_http_packet(reader: BinaryReader):
 #     ...
 
 
+@dataclass
+class NetworkStack:
+    data_link: Optional[BasePacket] = None
+    network: Optional[BasePacket] = None
+    transport: Optional[BasePacket] = None
+    application: Optional[BasePacket] = None
+
+
+def read_full_network_stack(data: bytes) -> NetworkStack:
+    """Parse the full network stack from data received from the client socket."""
+    reader = BinaryReader(data)
+
+    data_link = read_ethernet_frame(reader)
+    network = transport = application = None
+
+    if data_link.ether_type == EtherType.INTERNET_PROTOCOL_VERSION_4:
+        network = read_ipv4_packet(reader)
+        if network.protocol == SocketProtocols.TCP:
+            transport = read_tcp_packet(reader)
+        elif network.protocol == SocketProtocols.UDP:
+            transport = read_udp_packet(reader)
+        elif network.protocol == SocketProtocols.ICMP:
+            transport = read_icmp_packet(reader)
+        else:
+            print(f"non-implemented ipv4 protocol: {network.protocol}")
+    elif data_link.ether_type == EtherType.ADDRESS_RESOLUTION_PROTOCOL:
+        transport = read_arp_packet(reader)
+    else:
+        print(f"non-implemented ethernet protocol: {data_link.ether_type}")
+
+    return NetworkStack(data_link, network, transport, application)
+
+
 def main() -> int:
     with socket.socket(
         family=socket.PF_PACKET,
@@ -378,6 +543,8 @@ def main() -> int:
     ) as sock:
         sock.bind(("eth0", 0))  # bind to network device
 
+        total_bytes_read = 0
+
         while True:
             data = sock.recv(9000)
             if len(data) == 9000:
@@ -385,36 +552,8 @@ def main() -> int:
                 # max size of a jumbo frame is 9000 bytes
                 breakpoint()
 
-            # parse the network stack from this request
-            with memoryview(data) as data_view:
-                reader = BinaryReader(data_view)
-
-                ethernet_frame = read_ethernet_frame(reader)
-                print(ethernet_frame)
-
-                if ethernet_frame.ether_type == EtherType.IPv4:
-                    ipv4_packet = read_ipv4_packet(reader)
-                    print(ipv4_packet)
-
-                    if ipv4_packet.protocol == SocketProtocols.TCP:
-                        tcp_packet = read_tcp_packet(reader)
-                        print(tcp_packet)
-                    elif ipv4_packet.protocol == SocketProtocols.UDP:
-                        udp_packet = read_udp_packet(reader)
-                        print(udp_packet)
-                    elif ipv4_packet.protocol == SocketProtocols.ICMP:
-                        icmp_packet = read_icmp_packet(reader)
-                        print(icmp_packet)
-                    else:
-                        print(f"non-implemented ipv4 protocol: {ipv4_packet.protocol}")
-                elif ethernet_frame.ether_type == EtherType.ARP:
-                    print("reading arp packet")
-                else:
-                    print(
-                        f"non-implemented ethernet protocol: {ethernet_frame.ether_type}"
-                    )
-
-            print()  # \n
+            network_stack = read_full_network_stack(data)
+            total_bytes_read += len(data)
 
     return 0
 
