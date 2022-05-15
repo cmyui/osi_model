@@ -286,8 +286,131 @@ def read_ipv4_packet(reader: BinaryReader) -> IPv4Packet:
     )
 
 
-def read_arp_packet(reader: BinaryReader):
-    ...
+# https://www.iana.org/assignments/arp-parameters/arp-parameters.xhtml
+
+
+class ARPHardwareType(IntEnum):
+    ETHERNET = 1
+    EXPERIMENTAL_ETHERNET = 2
+    AMATEUR_RADIO_AX25 = 3
+    PROTEON_PRONET_TOKEN_RING = 4
+    CHAOS = 5
+    IEEE_802 = 6
+    ARCNET = 7
+    HYPERCHANNEL = 8
+    LANSTAR = 9
+    AUTONET_SHORT_ADDRESS = 10
+    LOCALTALK = 11
+    LOCALNET = 12
+    ULTRA_LINK = 13
+    SMDS = 14
+    FRAME_RELAY = 15
+    ASYNCHRONOUS_TRANSMISSION_MODE_16_BIT = 16
+    HDLC = 17
+    FIBRE_CHANNEL = 18
+    ASYNCHRONOUS_TRANSMISSION_MODE_32_BIT = 19
+    SERIAL_LINE = 20
+    ASYNCHRONOUS_TRANSMISSION_MODE_64_BIT = 21
+    MIL_STD_188_220 = 22
+    METRICOM = 23
+    IEE_1394_1995 = 24
+    MAPOS = 25
+    TWINAXIAL = 26
+    EUI_64 = 27
+    HIPARP = 28
+    IP_AND_AROP_OVER_ISO_7816_3 = 29
+    ARPSEC = 30
+    IPSEC_TUNNEL = 31
+    INFINIBAND = 32
+    TIA_102_PROJECT_25_COMMON_AIR_INTERFACE = 33  # CAI
+    WIEGAND_INTERFACE = 34
+    PURE_IP = 35
+    HW_EXP1 = 36
+    HFI = 37
+    # 38-255 Unassigned
+    HW_EXP2 = 256
+    AETHERNET = 257
+    # 258-65534 Unassigned
+    # 65535 Reserved
+
+
+class ARPOperation(IntEnum):
+    # 0 Reserved
+    REQUEST = 1
+    REPLY = 2
+    REQUEST_RESERVE = 3
+    REPLY_RESERVE = 4
+    DRARP_REQUEST = 5
+    DRARP_REPLY = 6
+    DRARP_ERROR = 7
+    INARP_REQUEST = 8
+    INARP_REPLY = 9
+    ARP_NAK = 10
+    MARS_REQUEST = 11
+    MARS_MULTI = 12
+    MARS_MSERV = 13
+    MARS_JOIN = 14
+    MARS_LEAVE = 15
+    MARS_NAK = 16
+    MARS_UNSERV = 17
+    MARS_SJOIN = 18
+    MARS_SLEAVE = 19
+    MARS_GROUPLIST_REQUEST = 20
+    MARS_GROUPLIST_REPLY = 21
+    MARS_REDIRECT_MAP = 22
+    MAPOS_UNARP = 23
+    OP_EXP1 = 24
+    OP_EXP2 = 25
+    # 26-65534 Unassigned
+    # 65535 Reserved
+
+
+@dataclass
+class ARPPacket(BasePacket):
+    hardware_type: ARPHardwareType  # htype
+    protocol_type: int  # ptype
+    hardware_address_length: int  # hlen
+    protocol_address_length: int  # plen
+    operation: ARPOperation  # oper
+    sender_hardware_address: bytes  # sha
+    sender_protocol_address: bytes  # spa
+    target_hardware_address: bytes  # tha
+    target_protocol_address: bytes  # tpa
+
+
+def read_arp_packet(reader: BinaryReader) -> ARPPacket:
+    """\
+    Read an address resolution packet.
+
+    https://datatracker.ietf.org/doc/html/rfc826#section-4.2
+    """
+    hardware_type = ARPHardwareType(reader.read_u16())
+    protocol_type = reader.read_u16()
+    hardware_address_length = reader.read_u8()
+    protocol_address_length = reader.read_u8()
+    operation = ARPOperation(reader.read_u16())
+
+    assert hardware_address_length == 6
+    assert protocol_address_length == 4
+
+    # TODO: should i be turning these into str? .hex(":")? .join(".")?
+    sender_hardware_address = reader.read_bytes(hardware_address_length)
+    sender_protocol_address = reader.read_bytes(protocol_address_length)
+    target_hardware_address = reader.read_bytes(hardware_address_length)
+    target_protocol_address = reader.read_bytes(protocol_address_length)
+
+    return ARPPacket(
+        hardware_type=hardware_type,
+        protocol_type=protocol_type,
+        hardware_address_length=hardware_address_length,
+        protocol_address_length=protocol_address_length,
+        operation=operation,
+        sender_hardware_address=sender_hardware_address,
+        sender_protocol_address=sender_protocol_address,
+        target_hardware_address=target_hardware_address,
+        target_protocol_address=target_protocol_address,
+        data=None,  # to be assigned
+    )
 
 
 class TCPFlags(IntFlag):
